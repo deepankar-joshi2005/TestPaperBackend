@@ -7,6 +7,8 @@ import testRoutes from "./test.routes";
 import questionRoutes from "./question.routes";
 import studentRoutes from "./student.routes";
 import uploadRoutes from "./upload.routes";
+import notesSubjectRoutes from "./notesSubject.routes";
+import noteRoutes from "./note.routes";
 
 const router = Router();
 
@@ -19,5 +21,7 @@ router.use("/tests", testRoutes);
 router.use("/questions", questionRoutes);
 router.use("/students", studentRoutes);
 router.use("/upload", uploadRoutes);
+router.use("/notes-subjects", notesSubjectRoutes);
+router.use("/notes", noteRoutes);
 
 export default router;

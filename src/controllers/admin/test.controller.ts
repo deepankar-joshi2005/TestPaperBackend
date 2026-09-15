@@ -4,6 +4,7 @@ import Question from "../../models/question.model";
 import TestSeries from "../../models/testSeries.model";
 import TestAttempt from "../../models/testAttempt.model";
 import { AuthRequest } from "../../middleware/auth.middleware";
+import { notifyAllStudents } from "../notification.controller";
 
 const CONFIG_FIELDS = [
   "title",
@@ -19,6 +20,10 @@ const CONFIG_FIELDS = [
   "maxAttempts",
   "startDate",
   "endDate",
+  "format",
+  "questionPdfUrl",
+  "answerKeyUrl",
+  "answerKeyType",
 ] as const;
 
 export const listAllTests = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -54,7 +59,7 @@ export const listAllTests = async (req: AuthRequest, res: Response): Promise<voi
 
 export const createTest = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { title, series, subject, description, difficulty } = req.body as Record<
+    const { title, series, subject, description, difficulty, format } = req.body as Record<
       string,
       string | undefined
     >;
@@ -75,6 +80,7 @@ export const createTest = async (req: AuthRequest, res: Response): Promise<void>
       subject: subject ?? "Multiple Subjects",
       description: description ?? "",
       difficulty: difficulty ?? "Mixed",
+      format: format === "pdf" ? "pdf" : "mcq",
       status: "draft",
       order,
     });
@@ -124,11 +130,32 @@ export const getPublishChecklist = async (req: AuthRequest, res: Response): Prom
       res.status(404).json({ message: "Test not found" });
       return;
     }
+
+    if (test.format === "pdf") {
+      res.status(200).json({
+        testId: test._id,
+        title: test.title,
+        format: "pdf",
+        checklist: {
+          nameAdded: !!test.title,
+          durationSet: test.durationMinutes > 0,
+          questionPdfUploaded: !!test.questionPdfUrl,
+          answerKeyUploaded: !!test.answerKeyUrl,
+          allValidated: !!test.questionPdfUrl,
+        },
+        summary: {
+          durationMinutes: test.durationMinutes,
+        },
+      });
+      return;
+    }
+
     const questionCount = await Question.countDocuments({ test: test._id });
 
     res.status(200).json({
       testId: test._id,
       title: test.title,
+      format: "mcq",
       questionCount,
       checklist: {
         nameAdded: !!test.title,
@@ -157,16 +184,122 @@ export const publishTest = async (req: AuthRequest, res: Response): Promise<void
       res.status(404).json({ message: "Test not found" });
       return;
     }
-    const questionCount = await Question.countDocuments({ test: test._id });
-    if (questionCount === 0) {
-      res.status(400).json({ message: "Add at least one question before publishing" });
-      return;
+
+    if (test.format === "pdf") {
+      if (!test.questionPdfUrl) {
+        res.status(400).json({ message: "Upload the question PDF before publishing" });
+        return;
+      }
+    } else {
+      const questionCount = await Question.countDocuments({ test: test._id });
+      if (questionCount === 0) {
+        res.status(400).json({ message: "Add at least one question before publishing" });
+        return;
+      }
     }
     test.status = "published";
     await test.save();
+
+    const series = await TestSeries.findById(test.series);
+    await notifyAllStudents(
+      "New Test Added",
+      `${test.title}${series ? ` in ${series.title}` : ""} is now available. Attempt it now!`
+    );
+
     res.status(200).json(test);
   } catch (error) {
     res.status(500).json({ message: "Failed to publish test", error });
+  }
+};
+
+export const setSubjectSections = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const test = await Test.findById(req.params.id);
+    if (!test) {
+      res.status(404).json({ message: "Test not found" });
+      return;
+    }
+
+    const { enabled, sections } = req.body as {
+      enabled?: boolean;
+      sections?: { name?: string; startNo?: number | string; endNo?: number | string }[];
+    };
+
+    if (!enabled) {
+      test.subjectSections = [];
+      await test.save();
+      res.status(200).json(test);
+      return;
+    }
+
+    const totalQuestions = await Question.countDocuments({ test: test._id });
+    if (totalQuestions === 0) {
+      res.status(400).json({
+        message: "Add questions to this test before dividing it by subject.",
+      });
+      return;
+    }
+
+    if (!Array.isArray(sections) || sections.length === 0) {
+      res.status(400).json({ message: "Add at least one subject section." });
+      return;
+    }
+
+    let expectedStart = 1;
+    const cleanSections: { name: string; startNo: number; endNo: number }[] = [];
+
+    for (let i = 0; i < sections.length; i++) {
+      const raw = sections[i];
+      const position = i + 1;
+      const name = raw?.name?.trim();
+      const startNo = Number(raw?.startNo);
+      const endNo = Number(raw?.endNo);
+
+      if (!name) {
+        res.status(400).json({ message: `Section ${position}: Subject name is required.` });
+        return;
+      }
+      if (!Number.isInteger(startNo) || !Number.isInteger(endNo)) {
+        res.status(400).json({
+          message: `Section ${position} (${name}): Question numbers must be whole numbers.`,
+        });
+        return;
+      }
+      if (startNo !== expectedStart) {
+        res.status(400).json({
+          message: `Section ${position} (${name}): Question numbers must continue right after the previous section. This section should start at question ${expectedStart}, not ${startNo}.`,
+        });
+        return;
+      }
+      if (endNo < startNo) {
+        res.status(400).json({
+          message: `Section ${position} (${name}): The last question number cannot come before the first question number.`,
+        });
+        return;
+      }
+      if (endNo > totalQuestions) {
+        res.status(400).json({
+          message: `Section ${position} (${name}): Question number ${endNo} does not exist. This test only has ${totalQuestions} questions.`,
+        });
+        return;
+      }
+
+      cleanSections.push({ name, startNo, endNo });
+      expectedStart = endNo + 1;
+    }
+
+    if (expectedStart - 1 !== totalQuestions) {
+      res.status(400).json({
+        message: `These sections only cover questions 1 to ${expectedStart - 1}, but the test has ${totalQuestions} questions. Add another section to cover questions ${expectedStart} to ${totalQuestions}.`,
+      });
+      return;
+    }
+
+    test.subjectSections = cleanSections;
+    await test.save();
+    res.status(200).json(test);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to save subject sections", error });
   }
 };
 

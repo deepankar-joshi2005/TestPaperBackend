@@ -115,28 +115,49 @@ export const getTestsByCategory = async (req: AuthRequest, res: Response): Promi
       user: userId,
       test: { $in: tests.map((t) => t._id) },
     });
-    const attemptMap = new Map(attempts.map((a) => [String(a.test), a]));
+    const attemptsByTest = new Map<string, typeof attempts>();
+    for (const a of attempts) {
+      const key = String(a.test);
+      const arr = attemptsByTest.get(key) ?? [];
+      arr.push(a);
+      attemptsByTest.set(key, arr);
+    }
 
     res.status(200).json({
       category,
       seriesTitle: seriesList[0]?.title ?? `${category} Mock Tests`,
       bannerImage: seriesList[0]?.bannerImage ?? null,
       tests: tests.map((t) => {
-        const attempt = attemptMap.get(String(t._id));
+        const testAttempts = attemptsByTest.get(String(t._id)) ?? [];
+        const inProgress = testAttempts.find((a) => a.status === "in-progress");
+        const completed = testAttempts
+          .filter((a) => a.status === "completed")
+          .sort((a, b) => (b.submittedAt?.getTime() ?? 0) - (a.submittedAt?.getTime() ?? 0));
+        const latestCompleted = completed[0];
+
         let status: "not-attempted" | "in-progress" | "completed" = "not-attempted";
-        if (attempt) status = attempt.status === "completed" ? "completed" : "in-progress";
+        if (inProgress) status = "in-progress";
+        else if (latestCompleted) status = "completed";
+
+        const attemptsUsed = completed.length;
+        const canReattempt =
+          status === "completed" && (t.maxAttempts === 0 || attemptsUsed < t.maxAttempts);
 
         return {
           id: t._id,
           title: t.title,
+          format: t.format,
           totalQuestions: t.totalQuestions,
           durationMinutes: t.durationMinutes,
           totalMarks: t.totalMarks,
           difficulty: t.difficulty,
           status,
-          attemptId: attempt?._id ?? null,
-          score: attempt?.status === "completed" ? attempt.score : null,
-          scorePercent: attempt?.status === "completed" ? attempt.scorePercent : null,
+          attemptId: inProgress?._id ?? latestCompleted?._id ?? null,
+          score: latestCompleted?.score ?? null,
+          scorePercent: latestCompleted?.scorePercent ?? null,
+          maxAttempts: t.maxAttempts,
+          attemptsUsed,
+          canReattempt,
         };
       }),
     });
@@ -160,6 +181,7 @@ export const getTestInstructions = async (req: AuthRequest, res: Response): Prom
       title: test.title,
       seriesTitle: series?.title ?? "",
       category: series?.category ?? "",
+      format: test.format,
       totalQuestions: test.totalQuestions,
       totalMarks: test.totalMarks,
       durationMinutes: test.durationMinutes,

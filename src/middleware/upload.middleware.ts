@@ -27,6 +27,18 @@ export const uploadImage = multer({
   },
 });
 
+export const uploadDocument = multer({
+  storage: imageStorage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype !== "application/pdf" && !file.mimetype.startsWith("image/")) {
+      cb(new Error("Only PDF or image files are allowed"));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
 export const uploadImport = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },

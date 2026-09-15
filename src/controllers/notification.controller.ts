@@ -1,6 +1,20 @@
 import { Response } from "express";
 import Notification from "../models/notification.model";
+import User from "../models/user.model";
 import { AuthRequest } from "../middleware/auth.middleware";
+
+export const notifyAllStudents = async (title: string, message: string): Promise<void> => {
+  const students = await User.find({ role: "student" }, { _id: 1 });
+  if (students.length === 0) return;
+  await Notification.insertMany(
+    students.map((s) => ({
+      user: s._id,
+      type: "system" as const,
+      title,
+      message,
+    }))
+  );
+};
 
 export const getNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {

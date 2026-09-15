@@ -4,6 +4,7 @@ import Test from "../../models/test.model";
 import Question from "../../models/question.model";
 import TestAttempt from "../../models/testAttempt.model";
 import { AuthRequest } from "../../middleware/auth.middleware";
+import { notifyAllStudents } from "../notification.controller";
 
 const ALLOWED_FIELDS = [
   "title",
@@ -143,6 +144,10 @@ export const publishSeries = async (req: AuthRequest, res: Response): Promise<vo
       res.status(404).json({ message: "Test series not found" });
       return;
     }
+    await notifyAllStudents(
+      "New Test Series Added",
+      `${series.title} is now available. Start practicing now!`
+    );
     res.status(200).json(series);
   } catch (error) {
     res.status(500).json({ message: "Failed to publish test series", error });
@@ -201,6 +206,7 @@ export const getSeriesTests = async (req: AuthRequest, res: Response): Promise<v
       tests: tests.map((t) => ({
         id: t._id,
         title: t.title,
+        format: t.format,
         totalQuestions: t.totalQuestions,
         durationMinutes: t.durationMinutes,
         totalMarks: t.totalMarks,

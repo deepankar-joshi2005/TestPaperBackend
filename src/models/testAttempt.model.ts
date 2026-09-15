@@ -15,6 +15,12 @@ export interface ISubjectBreakdown {
   total: number;
 }
 
+export interface ISectionBreakdown {
+  name: string;
+  correct: number;
+  total: number;
+}
+
 export interface ITestAttempt extends Document {
   user: Types.ObjectId;
   test: Types.ObjectId;
@@ -36,6 +42,7 @@ export interface ITestAttempt extends Document {
   rank: number | null;
   totalCandidates: number | null;
   subjectBreakdown: ISubjectBreakdown[];
+  sectionBreakdown: ISectionBreakdown[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -53,6 +60,15 @@ const answerSchema = new Schema<IAnswer>(
 const subjectBreakdownSchema = new Schema<ISubjectBreakdown>(
   {
     subject: { type: String, required: true },
+    correct: { type: Number, required: true },
+    total: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+const sectionBreakdownSchema = new Schema<ISectionBreakdown>(
+  {
+    name: { type: String, required: true },
     correct: { type: Number, required: true },
     total: { type: Number, required: true },
   },
@@ -80,6 +96,7 @@ const testAttemptSchema = new Schema<ITestAttempt>({
   rank: { type: Number, default: null },
   totalCandidates: { type: Number, default: null },
   subjectBreakdown: { type: [subjectBreakdownSchema], default: [] },
+  sectionBreakdown: { type: [sectionBreakdownSchema], default: [] },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

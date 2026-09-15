@@ -26,7 +26,9 @@ export const getDashboard = async (req: AuthRequest, res: Response): Promise<voi
       await Promise.all([
       Test.countDocuments({ status: { $ne: "draft" } }),
       TestAttempt.countDocuments({ user: userId }),
-      TestAttempt.findOne({ user: userId, status: "in-progress" }).sort({ updatedAt: -1 }),
+      TestAttempt.findOne({ user: userId, status: "in-progress" })
+        .populate<{ test: { _id: unknown; format?: string } }>("test", "format")
+        .sort({ updatedAt: -1 }),
       TestSeries.find(seriesFilter).sort({ createdAt: -1 }).limit(10),
       TestAttempt.aggregate([
         { $match: { status: "completed", scorePercent: { $ne: null } } },
@@ -46,6 +48,11 @@ export const getDashboard = async (req: AuthRequest, res: Response): Promise<voi
     const rank = rankIndex >= 0 ? rankIndex + 1 : null;
     const avgScore = rankIndex >= 0 ? Math.round(rankAgg[rankIndex].avgScore) : 0;
 
+    const continueTestFormat =
+      typeof continueTest?.test === "object" && continueTest?.test !== null && "format" in continueTest.test
+        ? (continueTest.test as { format?: string }).format
+        : "mcq";
+
     res.status(200).json({
       user: { id: user._id, name: user.name, email: user.email },
       stats: {
@@ -57,13 +64,18 @@ export const getDashboard = async (req: AuthRequest, res: Response): Promise<voi
       continueTest: continueTest
         ? {
             attemptId: continueTest._id,
-            testId: continueTest.test,
+            testId:
+              typeof continueTest.test === "object" && continueTest.test !== null && "_id" in continueTest.test
+                ? (continueTest.test as { _id: unknown })._id
+                : continueTest.test,
             title: continueTest.title,
             totalQuestions: continueTest.totalQuestions,
             questionsCompleted: continueTest.questionsCompleted,
-            percent: Math.round(
-              (continueTest.questionsCompleted / continueTest.totalQuestions) * 100
-            ),
+            percent:
+              continueTest.totalQuestions > 0
+                ? Math.round((continueTest.questionsCompleted / continueTest.totalQuestions) * 100)
+                : 0,
+            format: continueTestFormat || "mcq",
           }
         : null,
       categories: activeCategories.map((c) => ({ name: c.name, iconImage: c.iconImage })),

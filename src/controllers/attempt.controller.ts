@@ -59,17 +59,21 @@ export const startAttempt = async (req: AuthRequest, res: Response): Promise<voi
       });
     }
 
-    const questions = await Question.find({ test: testId }).sort({ order: 1 });
+    const questions =
+      test.format === "pdf" ? [] : await Question.find({ test: testId }).sort({ order: 1 });
 
     res.status(200).json({
       attemptId: attempt._id,
       test: {
         id: test._id,
         title: test.title,
+        format: test.format,
+        questionPdfUrl: test.format === "pdf" ? test.questionPdfUrl : undefined,
         totalQuestions: test.totalQuestions,
         durationMinutes: test.durationMinutes,
         totalMarks: test.totalMarks,
         negativeMarks: test.negativeMarks,
+        subjectSections: test.subjectSections,
       },
       startedAt: attempt.startedAt,
       questions: questions.map((q) => ({
@@ -162,17 +166,46 @@ export const submitAttempt = async (req: AuthRequest, res: Response): Promise<vo
       return;
     }
 
-    const questions = await Question.find({ test: attempt.test });
+    if (test.format === "pdf") {
+      attempt.status = "completed";
+      attempt.submittedAt = new Date();
+      attempt.timeTakenSeconds = Math.round(
+        (attempt.submittedAt.getTime() - attempt.startedAt.getTime()) / 1000
+      );
+      await attempt.save();
+
+      await Notification.create({
+        user: userId,
+        type: "result",
+        title: "Test Submitted",
+        message: `You have submitted ${attempt.title}. View the answer key to check your answers.`,
+      });
+
+      res.status(200).json(buildPdfResultPayload(attempt, test));
+      return;
+    }
+
+    const questions = await Question.find({ test: attempt.test }).sort({ order: 1 });
 
     let correctCount = 0;
     let wrongCount = 0;
     let skippedCount = 0;
     let score = 0;
     const subjectTally = new Map<string, { correct: number; total: number }>();
+    const sectionTally = test.subjectSections.map((section) => ({
+      name: section.name,
+      correct: 0,
+      total: 0,
+    }));
 
     for (const question of questions) {
+      const serialNo = question.order + 1;
+      const sectionIndex = test.subjectSections.findIndex(
+        (section) => serialNo >= section.startNo && serialNo <= section.endNo
+      );
       const subjectStat = subjectTally.get(question.subject) ?? { correct: 0, total: 0 };
       subjectStat.total += 1;
+      if (sectionIndex !== -1) sectionTally[sectionIndex].total += 1;
 
       const answer = attempt.answers.find((a) => String(a.question) === String(question._id));
       if (!answer || answer.selectedOption === null) {
@@ -182,6 +215,7 @@ export const submitAttempt = async (req: AuthRequest, res: Response): Promise<vo
         score += question.marks ?? test.totalMarks / test.totalQuestions;
         answer.isCorrect = true;
         subjectStat.correct += 1;
+        if (sectionIndex !== -1) sectionTally[sectionIndex].correct += 1;
       } else {
         wrongCount += 1;
         if (test.negativeMarkingEnabled) {
@@ -217,15 +251,27 @@ export const submitAttempt = async (req: AuthRequest, res: Response): Promise<vo
       correct: stat.correct,
       total: stat.total,
     }));
+    attempt.sectionBreakdown = sectionTally;
 
     const completedAttempts = await TestAttempt.find({
       test: attempt.test,
       status: "completed",
-    }).sort({ score: -1 });
+    });
 
-    const rankIndex = completedAttempts.findIndex((a) => String(a._id) === String(attempt._id));
-    attempt.rank = rankIndex >= 0 ? rankIndex + 1 : completedAttempts.length + 1;
-    attempt.totalCandidates = Math.max(completedAttempts.length, attempt.rank);
+    // A user may have multiple completed attempts (reattempts) — rank this
+    // attempt against every other user's best score, not each raw attempt.
+    const bestByOtherUser = new Map<string, number>();
+    for (const a of completedAttempts) {
+      if (String(a.user) === String(userId)) continue;
+      const uid = String(a.user);
+      const existingBest = bestByOtherUser.get(uid);
+      if (existingBest === undefined || (a.score ?? 0) > existingBest) {
+        bestByOtherUser.set(uid, a.score ?? 0);
+      }
+    }
+    const otherBestScores = Array.from(bestByOtherUser.values());
+    attempt.rank = otherBestScores.filter((s) => s > score).length + 1;
+    attempt.totalCandidates = otherBestScores.length + 1;
 
     await attempt.save();
 
@@ -253,6 +299,10 @@ export const getResult = async (req: AuthRequest, res: Response): Promise<void> 
       return;
     }
     const test = await Test.findById(attempt.test);
+    if (test?.format === "pdf") {
+      res.status(200).json(buildPdfResultPayload(attempt, test));
+      return;
+    }
     res.status(200).json(buildResultPayload(attempt, test?.totalMarks ?? 100, test?.passingMarks));
   } catch (error) {
     res.status(500).json({ message: "Failed to load result", error });
@@ -276,6 +326,7 @@ export const getSolutions = async (req: AuthRequest, res: Response): Promise<voi
 
     res.status(200).json({
       testTitle: test?.title ?? attempt.title,
+      subjectSections: test?.subjectSections ?? [],
       questions: questions.map((q, idx) => {
         const answer = answerMap.get(String(q._id));
         return {
@@ -310,24 +361,45 @@ export const getHistory = async (req: AuthRequest, res: Response): Promise<void>
       .limit(30);
 
     const tests = await Test.find({ _id: { $in: attempts.map((a) => a.test) } });
-    const passingMarksMap = new Map(tests.map((t) => [String(t._id), t.passingMarks]));
+    const testMap = new Map(tests.map((t) => [String(t._id), t]));
 
     res.status(200).json(
-      attempts.map((a) => ({
-        attemptId: a._id,
-        title: a.title,
-        score: a.score,
-        scorePercent: a.scorePercent,
-        rank: a.rank,
-        totalCandidates: a.totalCandidates,
-        passed: didPass(a.score, a.scorePercent, passingMarksMap.get(String(a.test))),
-        submittedAt: a.submittedAt,
-      }))
+      attempts.map((a) => {
+        const test = testMap.get(String(a.test));
+        const isPdf = test?.format === "pdf";
+        return {
+          attemptId: a._id,
+          title: a.title,
+          format: test?.format ?? "mcq",
+          score: isPdf ? null : a.score,
+          scorePercent: isPdf ? null : a.scorePercent,
+          rank: isPdf ? null : a.rank,
+          totalCandidates: isPdf ? null : a.totalCandidates,
+          passed: isPdf ? null : didPass(a.score, a.scorePercent, test?.passingMarks),
+          submittedAt: a.submittedAt,
+        };
+      })
     );
   } catch (error) {
     res.status(500).json({ message: "Failed to load test history", error });
   }
 };
+
+function buildPdfResultPayload(
+  attempt: InstanceType<typeof TestAttempt>,
+  test: InstanceType<typeof Test>
+) {
+  return {
+    attemptId: attempt._id,
+    testId: attempt.test,
+    title: attempt.title,
+    format: "pdf" as const,
+    timeTakenSeconds: attempt.timeTakenSeconds,
+    questionPdfUrl: test.questionPdfUrl,
+    answerKeyUrl: test.answerKeyUrl,
+    answerKeyType: test.answerKeyType,
+  };
+}
 
 function buildResultPayload(
   attempt: InstanceType<typeof TestAttempt>,
@@ -349,5 +421,7 @@ function buildResultPayload(
     timeTakenSeconds: attempt.timeTakenSeconds,
     rank: attempt.rank,
     totalCandidates: attempt.totalCandidates,
+    subjectBreakdown: attempt.subjectBreakdown,
+    sectionBreakdown: attempt.sectionBreakdown,
   };
 }

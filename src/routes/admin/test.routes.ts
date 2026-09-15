@@ -7,6 +7,7 @@ import {
   getPublishChecklist,
   publishTest,
   deleteTest,
+  setSubjectSections,
 } from "../../controllers/admin/test.controller";
 
 const router = Router();
@@ -16,6 +17,7 @@ router.post("/", createTest);
 router.get("/:id", getTestDetail);
 router.get("/:id/checklist", getPublishChecklist);
 router.put("/:id", updateTestConfig);
+router.put("/:id/subject-sections", setSubjectSections);
 router.patch("/:id/publish", publishTest);
 router.delete("/:id", deleteTest);
 
