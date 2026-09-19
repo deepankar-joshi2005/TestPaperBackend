@@ -7,6 +7,7 @@ export interface INote extends Document {
   pdfUrl: string | null;
   order: number;
   isActive: boolean;
+  isFreePreview: boolean;
   createdAt: Date;
 }
 
@@ -17,6 +18,7 @@ const noteSchema = new Schema<INote>({
   pdfUrl: { type: String, default: null },
   order: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
+  isFreePreview: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 

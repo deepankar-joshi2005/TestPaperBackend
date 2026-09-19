@@ -6,6 +6,14 @@ import TestSeries from "../models/testSeries.model";
 import TestAttempt from "../models/testAttempt.model";
 import Notification from "../models/notification.model";
 import { AuthRequest } from "../middleware/auth.middleware";
+import { hasSeriesAccess, getDateWindowStatus } from "../utils/access";
+
+const dateWindowMessage = (label: string, status: "upcoming" | "expired", date: Date | null): string => {
+  if (status === "upcoming") {
+    return `This ${label} will open on ${date ? date.toDateString() : "a later date"}.`;
+  }
+  return `This ${label}'s availability window has ended.`;
+};
 
 export const startAttempt = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -26,6 +34,23 @@ export const startAttempt = async (req: AuthRequest, res: Response): Promise<voi
     const series = await TestSeries.findById(test.series);
     if (!series) {
       res.status(404).json({ message: "Test series not found" });
+      return;
+    }
+
+    const seriesWindow = getDateWindowStatus(series.startDate, series.endDate, req.role);
+    if (seriesWindow !== "open") {
+      res.status(403).json({ message: dateWindowMessage("test series", seriesWindow, series.startDate) });
+      return;
+    }
+    const testWindow = getDateWindowStatus(test.startDate, test.endDate, req.role);
+    if (testWindow !== "open") {
+      res.status(403).json({ message: dateWindowMessage("test", testWindow, test.startDate) });
+      return;
+    }
+
+    const allowed = test.isFreeSample || (await hasSeriesAccess(userId, req.role, series));
+    if (!allowed) {
+      res.status(403).json({ message: "Please purchase this test series to unlock it." });
       return;
     }
 
@@ -68,7 +93,7 @@ export const startAttempt = async (req: AuthRequest, res: Response): Promise<voi
         id: test._id,
         title: test.title,
         format: test.format,
-        questionPdfUrl: test.format === "pdf" ? test.questionPdfUrl : undefined,
+        questionPdfUrl: test.format === "pdf" ? `/api/files/test-question/${test._id}` : undefined,
         totalQuestions: test.totalQuestions,
         durationMinutes: test.durationMinutes,
         totalMarks: test.totalMarks,
@@ -179,6 +204,9 @@ export const submitAttempt = async (req: AuthRequest, res: Response): Promise<vo
         type: "result",
         title: "Test Submitted",
         message: `You have submitted ${attempt.title}. View the answer key to check your answers.`,
+        testId: attempt.test,
+        attemptId: attempt._id,
+        targetScreen: "pdfAnswerKey",
       });
 
       res.status(200).json(buildPdfResultPayload(attempt, test));
@@ -280,6 +308,9 @@ export const submitAttempt = async (req: AuthRequest, res: Response): Promise<vo
       type: "result",
       title: "Test Completed",
       message: `You scored ${scorePercent}% in ${attempt.title} (Rank #${attempt.rank} of ${attempt.totalCandidates}).`,
+      testId: attempt.test,
+      attemptId: attempt._id,
+      targetScreen: "solutionReview",
     });
 
     res.status(200).json(buildResultPayload(attempt, test.totalMarks, test.passingMarks));
@@ -299,6 +330,15 @@ export const getResult = async (req: AuthRequest, res: Response): Promise<void> 
       return;
     }
     const test = await Test.findById(attempt.test);
+    if (test) {
+      const series = await TestSeries.findById(test.series);
+      const allowed =
+        test.isFreeSample || (series && (await hasSeriesAccess(userId, req.role, series)));
+      if (!allowed) {
+        res.status(403).json({ message: "Please purchase this test series to unlock it." });
+        return;
+      }
+    }
     if (test?.format === "pdf") {
       res.status(200).json(buildPdfResultPayload(attempt, test));
       return;
@@ -320,6 +360,15 @@ export const getSolutions = async (req: AuthRequest, res: Response): Promise<voi
       return;
     }
     const test = await Test.findById(attempt.test);
+    if (test) {
+      const series = await TestSeries.findById(test.series);
+      const allowed =
+        test.isFreeSample || (series && (await hasSeriesAccess(userId, req.role, series)));
+      if (!allowed) {
+        res.status(403).json({ message: "Please purchase this test series to unlock it." });
+        return;
+      }
+    }
     const questions = await Question.find({ test: attempt.test }).sort({ order: 1 });
 
     const answerMap = new Map(attempt.answers.map((a) => [String(a.question), a]));
@@ -395,8 +444,8 @@ function buildPdfResultPayload(
     title: attempt.title,
     format: "pdf" as const,
     timeTakenSeconds: attempt.timeTakenSeconds,
-    questionPdfUrl: test.questionPdfUrl,
-    answerKeyUrl: test.answerKeyUrl,
+    questionPdfUrl: test.questionPdfUrl ? `/api/files/test-question/${test._id}` : null,
+    answerKeyUrl: test.answerKeyUrl ? `/api/files/answer-key/${test._id}` : null,
     answerKeyType: test.answerKeyType,
   };
 }

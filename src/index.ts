@@ -1,7 +1,14 @@
+import dotenv from "dotenv";
+// Loaded first so .env is available to the rest of the app as early as
+// possible. Note: under `tsx` (esbuild) in dev, import statements can still
+// get hoisted above this call, so any module that truly needs an env var
+// correct at startup must still read process.env lazily (inside a function),
+// not into a top-level const — see config/db.ts and config/razorpay.ts.
+dotenv.config();
+
 import path from "path";
 import express, { Application, Request, Response } from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import connectDB from "./config/db";
 import testPaperRoutes from "./routes/testPaper.routes";
 import authRoutes from "./routes/auth.routes";
@@ -14,13 +21,21 @@ import profileRoutes from "./routes/profile.routes";
 import notificationsRoutes from "./routes/notifications.routes";
 import supportRoutes from "./routes/support.routes";
 import adminRoutes from "./routes/admin";
-
-dotenv.config();
+import currentAffairRoutes from "./routes/currentAffair.routes";
+import paymentRoutes from "./routes/payment.routes";
+import filesRoutes from "./routes/files.routes";
+import { razorpayWebhook } from "./controllers/payment.controller";
 
 const app: Application = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
+
+// Razorpay's webhook signature is verified over the exact raw request body,
+// so this route needs express.raw() instead of the JSON parser below — it
+// must be registered before app.use(express.json()) to see the raw bytes.
+app.post("/api/payments/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
+
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
@@ -39,6 +54,9 @@ app.use("/api/profile", profileRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/support", supportRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/current-affairs", currentAffairRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/files", filesRoutes);
 
 connectDB().then(() => {
   app.listen(PORT, () => {

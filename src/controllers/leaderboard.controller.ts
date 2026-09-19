@@ -1,8 +1,10 @@
 import { Response } from "express";
 import Test from "../models/test.model";
 import TestAttempt from "../models/testAttempt.model";
+import TestSeries from "../models/testSeries.model";
 import User from "../models/user.model";
 import { AuthRequest } from "../middleware/auth.middleware";
+import { hasSeriesAccess } from "../utils/access";
 
 const getInitials = (name: string): string =>
   name
@@ -20,6 +22,14 @@ export const getLeaderboard = async (req: AuthRequest, res: Response): Promise<v
     const test = await Test.findById(testId);
     if (!test) {
       res.status(404).json({ message: "Test not found" });
+      return;
+    }
+
+    const series = await TestSeries.findById(test.series);
+    const allowed =
+      test.isFreeSample || (series && (await hasSeriesAccess(userId, req.role, series)));
+    if (!allowed) {
+      res.status(403).json({ message: "Please purchase this test series to unlock it." });
       return;
     }
 

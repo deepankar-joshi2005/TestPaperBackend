@@ -7,6 +7,10 @@ export interface INotification extends Document {
   type: NotificationType;
   title: string;
   message: string;
+  testId: Types.ObjectId | null;
+  attemptId: Types.ObjectId | null;
+  category: string | null;
+  targetScreen: string | null;
   isRead: boolean;
   createdAt: Date;
 }
@@ -16,6 +20,10 @@ const notificationSchema = new Schema<INotification>({
   type: { type: String, enum: ["result", "system"], default: "system" },
   title: { type: String, required: true, trim: true },
   message: { type: String, required: true, trim: true },
+  testId: { type: Schema.Types.ObjectId, ref: "Test", default: null },
+  attemptId: { type: Schema.Types.ObjectId, ref: "TestAttempt", default: null },
+  category: { type: String, default: null },
+  targetScreen: { type: String, default: null },
   isRead: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });

@@ -2,7 +2,14 @@ import { Response } from "express";
 import Note from "../../models/note.model";
 import { AuthRequest } from "../../middleware/auth.middleware";
 
-const ALLOWED_FIELDS = ["title", "description", "pdfUrl", "order", "isActive"] as const;
+const ALLOWED_FIELDS = [
+  "title",
+  "description",
+  "pdfUrl",
+  "order",
+  "isActive",
+  "isFreePreview",
+] as const;
 
 function pickAllowed(body: Record<string, unknown>) {
   const update: Record<string, unknown> = {};
@@ -14,13 +21,14 @@ function pickAllowed(body: Record<string, unknown>) {
 
 export const createNote = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { subject, title, description, pdfUrl, order, isActive } = req.body as {
+    const { subject, title, description, pdfUrl, order, isActive, isFreePreview } = req.body as {
       subject?: string;
       title?: string;
       description?: string;
       pdfUrl?: string;
       order?: number;
       isActive?: boolean;
+      isFreePreview?: boolean;
     };
 
     if (!subject) {
@@ -44,6 +52,7 @@ export const createNote = async (req: AuthRequest, res: Response): Promise<void>
       pdfUrl,
       order: resolvedOrder,
       isActive: isActive ?? true,
+      isFreePreview: isFreePreview ?? false,
     });
 
     res.status(201).json(note);

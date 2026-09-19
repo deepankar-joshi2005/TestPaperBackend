@@ -1,9 +1,19 @@
+import { Types } from "mongoose";
 import { Response } from "express";
 import NotesSubject from "../../models/notesSubject.model";
 import Note from "../../models/note.model";
+import Purchase from "../../models/purchase.model";
 import { AuthRequest } from "../../middleware/auth.middleware";
 
-const ALLOWED_FIELDS = ["category", "name", "description", "displayOrder", "isActive"] as const;
+const ALLOWED_FIELDS = [
+  "category",
+  "name",
+  "description",
+  "displayOrder",
+  "isActive",
+  "accessType",
+  "price",
+] as const;
 
 function pickAllowed(body: Record<string, unknown>) {
   const update: Record<string, unknown> = {};
@@ -11,6 +21,14 @@ function pickAllowed(body: Record<string, unknown>) {
     if (body[field] !== undefined) update[field] = body[field];
   }
   return update;
+}
+
+async function revenueStats(subjectId: Types.ObjectId | string) {
+  const purchases = await Purchase.find({ itemType: "notesSubject", itemId: subjectId });
+  return {
+    buyerCount: purchases.length,
+    revenue: purchases.reduce((sum, p) => sum + p.amount, 0),
+  };
 }
 
 export const listNotesSubjects = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -28,7 +46,10 @@ export const listNotesSubjects = async (req: AuthRequest, res: Response): Promis
         description: s.description,
         displayOrder: s.displayOrder,
         isActive: s.isActive,
+        accessType: s.accessType,
+        price: s.price,
         noteCount: await Note.countDocuments({ subject: s._id }),
+        ...(await revenueStats(s._id)),
       }))
     );
 
@@ -53,7 +74,10 @@ export const getNotesSubjectDetail = async (req: AuthRequest, res: Response): Pr
       description: subject.description,
       displayOrder: subject.displayOrder,
       isActive: subject.isActive,
+      accessType: subject.accessType,
+      price: subject.price,
       noteCount,
+      ...(await revenueStats(subject._id)),
     });
   } catch (error) {
     res.status(500).json({ message: "Failed to load subject", error });
@@ -86,11 +110,13 @@ export const getNotesSubjectNotes = async (req: AuthRequest, res: Response): Pro
 
 export const createNotesSubject = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { category, name, description, displayOrder } = req.body as {
+    const { category, name, description, displayOrder, accessType, price } = req.body as {
       category?: string;
       name?: string;
       description?: string;
       displayOrder?: number;
+      accessType?: "free" | "paid";
+      price?: number;
     };
 
     if (!name || !name.trim()) {
@@ -107,6 +133,8 @@ export const createNotesSubject = async (req: AuthRequest, res: Response): Promi
       name: name.trim(),
       description: description ?? "",
       displayOrder: displayOrder ?? 0,
+      accessType: accessType ?? "free",
+      price: accessType === "paid" ? price ?? 0 : 0,
     });
 
     res.status(201).json(subject);

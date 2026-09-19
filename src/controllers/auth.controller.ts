@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import User, { Role } from "../models/user.model";
+import User, { Language, Role } from "../models/user.model";
 import { isValidEmail, isValidMobile, isStrongPassword } from "../utils/validators";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
@@ -16,12 +16,14 @@ const toPublicUser = (user: {
   email: string;
   mobile: string;
   role: Role;
+  preferredLanguage: Language;
 }) => ({
   id: user._id,
   name: user.name,
   email: user.email,
   mobile: user.mobile,
   role: user.role,
+  preferredLanguage: user.preferredLanguage,
 });
 
 export const register = async (req: Request, res: Response): Promise<void> => {

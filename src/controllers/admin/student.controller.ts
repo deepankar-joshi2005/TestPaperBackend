@@ -1,6 +1,9 @@
 import { Response } from "express";
 import User from "../../models/user.model";
 import TestAttempt from "../../models/testAttempt.model";
+import Purchase from "../../models/purchase.model";
+import TestSeries from "../../models/testSeries.model";
+import NotesSubject from "../../models/notesSubject.model";
 import { AuthRequest } from "../../middleware/auth.middleware";
 
 export const listStudents = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -53,6 +56,24 @@ export const getStudentDetail = async (req: AuthRequest, res: Response): Promise
     }
 
     const attempts = await TestAttempt.find({ user: student._id }).sort({ startedAt: -1 });
+    const purchases = await Purchase.find({ user: student._id }).sort({ purchasedAt: -1 });
+
+    const seriesTitles = new Map(
+      (
+        await TestSeries.find({
+          _id: { $in: purchases.filter((p) => p.itemType === "series").map((p) => p.itemId) },
+        })
+      ).map((s) => [String(s._id), s.title])
+    );
+    const subjectNames = new Map(
+      (
+        await NotesSubject.find({
+          _id: {
+            $in: purchases.filter((p) => p.itemType === "notesSubject").map((p) => p.itemId),
+          },
+        })
+      ).map((s) => [String(s._id), s.name])
+    );
 
     res.status(200).json({
       id: student._id,
@@ -67,6 +88,15 @@ export const getStudentDetail = async (req: AuthRequest, res: Response): Promise
         score: a.score,
         scorePercent: a.scorePercent,
         submittedAt: a.submittedAt,
+      })),
+      purchases: purchases.map((p) => ({
+        itemType: p.itemType,
+        itemTitle:
+          p.itemType === "series"
+            ? seriesTitles.get(String(p.itemId)) ?? "Deleted series"
+            : subjectNames.get(String(p.itemId)) ?? "Deleted subject",
+        amount: p.amount,
+        purchasedAt: p.purchasedAt,
       })),
     });
   } catch (error) {

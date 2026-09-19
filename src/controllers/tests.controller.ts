@@ -4,7 +4,11 @@ import TestSeries from "../models/testSeries.model";
 import Category from "../models/category.model";
 import Test from "../models/test.model";
 import TestAttempt from "../models/testAttempt.model";
+import Purchase from "../models/purchase.model";
 import { AuthRequest } from "../middleware/auth.middleware";
+import { hasSeriesAccess, getDateWindowStatus } from "../utils/access";
+
+type LockReason = "payment" | "upcoming" | "expired" | null;
 
 export const getTestSeriesSummary = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -89,9 +93,10 @@ export const getTestSeriesSummary = async (req: AuthRequest, res: Response): Pro
   }
 };
 
-export const getTestsByCategory = async (req: AuthRequest, res: Response): Promise<void> => {
+export const getSeriesByCategory = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.userId as string;
+    const isAdmin = req.role === "admin";
     const category = req.params.category;
 
     const categoryDoc = await Category.findOne({ name: category, isActive: true });
@@ -104,17 +109,95 @@ export const getTestsByCategory = async (req: AuthRequest, res: Response): Promi
       category,
       isAvailable: true,
       status: { $ne: "draft" },
-    });
+    }).sort({ createdAt: 1 });
+
     const seriesIds = seriesList.map((s) => s._id);
+    const tests = await Test.find({ series: { $in: seriesIds }, status: { $ne: "draft" } });
+
+    const testCountBySeries = new Map<string, number>();
+    const questionCountBySeries = new Map<string, number>();
+    const freeSampleCountBySeries = new Map<string, number>();
+    for (const t of tests) {
+      const key = String(t.series);
+      testCountBySeries.set(key, (testCountBySeries.get(key) ?? 0) + 1);
+      questionCountBySeries.set(key, (questionCountBySeries.get(key) ?? 0) + t.totalQuestions);
+      if (t.isFreeSample) {
+        freeSampleCountBySeries.set(key, (freeSampleCountBySeries.get(key) ?? 0) + 1);
+      }
+    }
+
+    const purchases = await Purchase.find({
+      user: userId,
+      itemType: "series",
+      itemId: { $in: seriesIds },
+    });
+    const purchasedSet = new Set(purchases.map((p) => String(p.itemId)));
+
+    res.status(200).json({
+      category,
+      series: seriesList.map((s) => {
+        const key = String(s._id);
+        const isPurchased = purchasedSet.has(key);
+        const paymentUnlocked = isAdmin || s.accessType === "free" || isPurchased;
+        const window = getDateWindowStatus(s.startDate, s.endDate, req.role);
+
+        let lockReason: LockReason = null;
+        if (window === "expired") lockReason = "expired";
+        else if (!paymentUnlocked) lockReason = "payment";
+        else if (window === "upcoming") lockReason = "upcoming";
+
+        return {
+          id: s._id,
+          title: s.title,
+          shortDescription: s.shortDescription,
+          bannerImage: s.bannerImage,
+          testCount: testCountBySeries.get(key) ?? s.totalPapers,
+          totalQuestions: questionCountBySeries.get(key) ?? 0,
+          freeSampleCount: freeSampleCountBySeries.get(key) ?? 0,
+          durationMinutes: s.durationMinutes,
+          difficulty: s.difficulty,
+          accessType: s.accessType,
+          price: s.price,
+          isLocked: lockReason !== null,
+          lockReason,
+          startDate: s.startDate,
+          endDate: s.endDate,
+          isPurchased: isAdmin || isPurchased,
+        };
+      }),
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to load test series", error });
+  }
+};
+
+export const getTestsBySeries = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.userId as string;
+    const { seriesId } = req.params;
+
+    const series = await TestSeries.findById(seriesId);
+    if (!series) {
+      res.status(404).json({ message: "Test series not found" });
+      return;
+    }
+
+    const unlocked = await hasSeriesAccess(userId, req.role, series);
+    const seriesWindow = getDateWindowStatus(series.startDate, series.endDate, req.role);
+
+    let seriesLockReason: LockReason = null;
+    if (seriesWindow === "expired") seriesLockReason = "expired";
+    else if (!unlocked) seriesLockReason = "payment";
+    else if (seriesWindow === "upcoming") seriesLockReason = "upcoming";
+
     const tests = await Test.find({
-      series: { $in: seriesIds },
+      series: seriesId,
       status: { $ne: "draft" },
     }).sort({ order: 1 });
 
-    const attempts = await TestAttempt.find({
-      user: userId,
-      test: { $in: tests.map((t) => t._id) },
-    });
+    const attempts = unlocked
+      ? await TestAttempt.find({ user: userId, test: { $in: tests.map((t) => t._id) } })
+      : [];
     const attemptsByTest = new Map<string, typeof attempts>();
     for (const a of attempts) {
       const key = String(a.test);
@@ -124,10 +207,48 @@ export const getTestsByCategory = async (req: AuthRequest, res: Response): Promi
     }
 
     res.status(200).json({
-      category,
-      seriesTitle: seriesList[0]?.title ?? `${category} Mock Tests`,
-      bannerImage: seriesList[0]?.bannerImage ?? null,
+      seriesId: series._id,
+      seriesTitle: series.title,
+      bannerImage: series.bannerImage,
+      accessType: series.accessType,
+      price: series.price,
+      isLocked: seriesLockReason !== null,
+      lockReason: seriesLockReason,
+      startDate: series.startDate,
+      endDate: series.endDate,
       tests: tests.map((t) => {
+        const testWindow = getDateWindowStatus(t.startDate, t.endDate, req.role);
+        const paymentOk = unlocked || t.isFreeSample;
+
+        let testLockReason: LockReason = null;
+        if (seriesWindow === "expired" || testWindow === "expired") testLockReason = "expired";
+        else if (seriesWindow === "upcoming" || testWindow === "upcoming") testLockReason = "upcoming";
+        else if (!paymentOk) testLockReason = "payment";
+
+        const canOpen = testLockReason === null;
+        if (!canOpen) {
+          return {
+            id: t._id,
+            title: t.title,
+            format: t.format,
+            totalQuestions: t.totalQuestions,
+            durationMinutes: t.durationMinutes,
+            totalMarks: t.totalMarks,
+            difficulty: t.difficulty,
+            isFreeSample: false,
+            isLocked: true,
+            lockReason: testLockReason,
+            startDate: t.startDate,
+            status: "not-attempted" as const,
+            attemptId: null,
+            score: null,
+            scorePercent: null,
+            maxAttempts: t.maxAttempts,
+            attemptsUsed: 0,
+            canReattempt: false,
+          };
+        }
+
         const testAttempts = attemptsByTest.get(String(t._id)) ?? [];
         const inProgress = testAttempts.find((a) => a.status === "in-progress");
         const completed = testAttempts
@@ -151,6 +272,10 @@ export const getTestsByCategory = async (req: AuthRequest, res: Response): Promi
           durationMinutes: t.durationMinutes,
           totalMarks: t.totalMarks,
           difficulty: t.difficulty,
+          isFreeSample: t.isFreeSample,
+          isLocked: false,
+          lockReason: null,
+          startDate: t.startDate,
           status,
           attemptId: inProgress?._id ?? latestCompleted?._id ?? null,
           score: latestCompleted?.score ?? null,
@@ -168,6 +293,7 @@ export const getTestsByCategory = async (req: AuthRequest, res: Response): Promi
 
 export const getTestInstructions = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const userId = req.userId as string;
     const { testId } = req.params;
     const test = await Test.findById(testId);
     if (!test) {
@@ -175,12 +301,33 @@ export const getTestInstructions = async (req: AuthRequest, res: Response): Prom
       return;
     }
     const series = await TestSeries.findById(test.series);
+    if (!series) {
+      res.status(404).json({ message: "Test series not found" });
+      return;
+    }
+
+    const seriesWindow = getDateWindowStatus(series.startDate, series.endDate, req.role);
+    if (seriesWindow !== "open") {
+      res.status(403).json({ message: "This test series is not currently available." });
+      return;
+    }
+    const testWindow = getDateWindowStatus(test.startDate, test.endDate, req.role);
+    if (testWindow !== "open") {
+      res.status(403).json({ message: "This test is not currently available." });
+      return;
+    }
+
+    const allowed = test.isFreeSample || (await hasSeriesAccess(userId, req.role, series));
+    if (!allowed) {
+      res.status(403).json({ message: "Please purchase this test series to unlock it." });
+      return;
+    }
 
     res.status(200).json({
       id: test._id,
       title: test.title,
-      seriesTitle: series?.title ?? "",
-      category: series?.category ?? "",
+      seriesTitle: series.title,
+      category: series.category,
       format: test.format,
       totalQuestions: test.totalQuestions,
       totalMarks: test.totalMarks,

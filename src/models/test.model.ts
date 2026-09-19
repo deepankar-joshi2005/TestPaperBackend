@@ -33,6 +33,7 @@ export interface ITest extends Document {
   questionPdfUrl: string | null;
   answerKeyUrl: string | null;
   answerKeyType: AnswerKeyType | null;
+  isFreeSample: boolean;
   createdAt: Date;
 }
 
@@ -67,6 +68,7 @@ const testSchema = new Schema<ITest>({
   questionPdfUrl: { type: String, default: null },
   answerKeyUrl: { type: String, default: null },
   answerKeyType: { type: String, enum: ["pdf", "image", null], default: null },
+  isFreeSample: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 

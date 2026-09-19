@@ -23,6 +23,7 @@ export interface ITestSeries extends Document {
   isPublic: boolean;
   isAvailable: boolean;
   status: SeriesStatus;
+  publishedAt: Date | null;
   createdAt: Date;
 }
 
@@ -46,6 +47,7 @@ const testSeriesSchema = new Schema<ITestSeries>({
   isPublic: { type: Boolean, default: true },
   isAvailable: { type: Boolean, default: true },
   status: { type: String, enum: ["draft", "published"], default: "draft" },
+  publishedAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
 });
 

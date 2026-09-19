@@ -24,6 +24,7 @@ const CONFIG_FIELDS = [
   "questionPdfUrl",
   "answerKeyUrl",
   "answerKeyType",
+  "isFreeSample",
 ] as const;
 
 export const listAllTests = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -203,7 +204,9 @@ export const publishTest = async (req: AuthRequest, res: Response): Promise<void
     const series = await TestSeries.findById(test.series);
     await notifyAllStudents(
       "New Test Added",
-      `${test.title}${series ? ` in ${series.title}` : ""} is now available. Attempt it now!`
+      `${test.title}${series ? ` in ${series.title}` : ""} is now available. Attempt it now!`,
+      "system",
+      { testId: test._id, category: series?.category, targetScreen: "testInstructions" }
     );
 
     res.status(200).json(test);

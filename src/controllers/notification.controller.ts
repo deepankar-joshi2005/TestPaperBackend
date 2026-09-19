@@ -1,17 +1,33 @@
 import { Response } from "express";
-import Notification from "../models/notification.model";
+import Notification, { NotificationType } from "../models/notification.model";
 import User from "../models/user.model";
 import { AuthRequest } from "../middleware/auth.middleware";
 
-export const notifyAllStudents = async (title: string, message: string): Promise<void> => {
+type NotificationExtra = {
+  testId?: unknown;
+  attemptId?: unknown;
+  category?: string;
+  targetScreen?: string;
+};
+
+export const notifyAllStudents = async (
+  title: string,
+  message: string,
+  type: NotificationType = "system",
+  extra: NotificationExtra = {}
+): Promise<void> => {
   const students = await User.find({ role: "student" }, { _id: 1 });
   if (students.length === 0) return;
   await Notification.insertMany(
     students.map((s) => ({
       user: s._id,
-      type: "system" as const,
+      type,
       title,
       message,
+      testId: extra.testId ?? null,
+      attemptId: extra.attemptId ?? null,
+      category: extra.category ?? null,
+      targetScreen: extra.targetScreen ?? null,
     }))
   );
 };
@@ -31,6 +47,10 @@ export const getNotifications = async (req: AuthRequest, res: Response): Promise
         type: n.type,
         title: n.title,
         message: n.message,
+        testId: n.testId,
+        attemptId: n.attemptId,
+        category: n.category,
+        targetScreen: n.targetScreen,
         isRead: n.isRead,
         createdAt: n.createdAt,
       })),

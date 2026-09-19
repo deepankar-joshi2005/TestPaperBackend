@@ -3,6 +3,7 @@ import TestSeries from "../../models/testSeries.model";
 import Test from "../../models/test.model";
 import Question from "../../models/question.model";
 import TestAttempt from "../../models/testAttempt.model";
+import Purchase from "../../models/purchase.model";
 import { AuthRequest } from "../../middleware/auth.middleware";
 import { notifyAllStudents } from "../notification.controller";
 
@@ -36,7 +37,10 @@ async function liveCounts(seriesId: string) {
   const testIds = tests.map((t) => t._id);
   const totalQuestions = tests.reduce((sum, t) => sum + t.totalQuestions, 0);
   const studentCount = (await TestAttempt.distinct("user", { test: { $in: testIds } })).length;
-  return { testCount: tests.length, totalQuestions, studentCount };
+  const purchases = await Purchase.find({ itemType: "series", itemId: seriesId });
+  const buyerCount = purchases.length;
+  const revenue = purchases.reduce((sum, p) => sum + p.amount, 0);
+  return { testCount: tests.length, totalQuestions, studentCount, buyerCount, revenue };
 }
 
 export const listSeries = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -61,9 +65,13 @@ export const listSeries = async (req: AuthRequest, res: Response): Promise<void>
           title: s.title,
           category: s.category,
           status: s.status,
+          accessType: s.accessType,
+          price: s.price,
           testCount: counts.testCount,
           totalQuestions: counts.totalQuestions,
           studentCount: counts.studentCount,
+          buyerCount: counts.buyerCount,
+          revenue: counts.revenue,
         };
       })
     );
@@ -137,7 +145,7 @@ export const publishSeries = async (req: AuthRequest, res: Response): Promise<vo
   try {
     const series = await TestSeries.findByIdAndUpdate(
       req.params.id,
-      { status: "published", isAvailable: true },
+      { status: "published", isAvailable: true, publishedAt: new Date() },
       { new: true }
     );
     if (!series) {
@@ -146,7 +154,9 @@ export const publishSeries = async (req: AuthRequest, res: Response): Promise<vo
     }
     await notifyAllStudents(
       "New Test Series Added",
-      `${series.title} is now available. Start practicing now!`
+      `${series.title} is now available. Start practicing now!`,
+      "system",
+      { category: series.category, targetScreen: "seriesList" }
     );
     res.status(200).json(series);
   } catch (error) {
