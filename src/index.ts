@@ -6,7 +6,6 @@ import dotenv from "dotenv";
 // not into a top-level const — see config/db.ts and config/razorpay.ts.
 dotenv.config();
 
-import path from "path";
 import express, { Application, Request, Response } from "express";
 import cors from "cors";
 import connectDB from "./config/db";
@@ -37,7 +36,6 @@ app.use(cors());
 app.post("/api/payments/webhook", express.raw({ type: "application/json" }), razorpayWebhook);
 
 app.use(express.json());
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 app.get("/api/health", (_req: Request, res: Response) => {
   res.status(200).json({ status: "ok", message: "Backend is running" });

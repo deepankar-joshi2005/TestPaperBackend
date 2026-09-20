@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 import { Response } from "express";
 import Test from "../models/test.model";
 import Note from "../models/note.model";
@@ -8,21 +8,16 @@ import NotesSubject from "../models/notesSubject.model";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { hasSeriesAccess, hasNotesAccess } from "../utils/access";
 
-const UPLOADS_DIR = path.join(__dirname, "../../uploads");
-
-// Resolves a stored "/uploads/xxx" path to a real file on disk, refusing to
-// serve anything outside UPLOADS_DIR (defends against a tampered/traversal path).
-function resolveUploadPath(storedPath: string): string | null {
-  const filename = path.basename(storedPath);
-  const resolved = path.join(UPLOADS_DIR, filename);
-  if (!fs.existsSync(resolved)) return null;
-  return resolved;
-}
-
-function sendPdf(res: Response, filePath: string): void {
-  res.sendFile(filePath, {
-    headers: { "Content-Type": "application/pdf" },
-  });
+// Fetches a Cloudinary-hosted file and pipes it through our own response so
+// the access checks in each handler below stay meaningful — the client only
+// ever talks to this endpoint and never sees the underlying Cloudinary URL.
+async function streamRemoteFile(res: Response, url: string): Promise<boolean> {
+  const upstream = await fetch(url);
+  if (!upstream.ok || !upstream.body) return false;
+  const contentType = upstream.headers.get("content-type");
+  if (contentType) res.setHeader("Content-Type", contentType);
+  await pipeline(Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]), res);
+  return true;
 }
 
 export const streamTestQuestionPdf = async (req: AuthRequest, res: Response): Promise<void> => {
@@ -43,12 +38,8 @@ export const streamTestQuestionPdf = async (req: AuthRequest, res: Response): Pr
       res.status(403).json({ message: "Please purchase this test series to unlock it." });
       return;
     }
-    const filePath = resolveUploadPath(test.questionPdfUrl);
-    if (!filePath) {
-      res.status(404).json({ message: "File not found" });
-      return;
-    }
-    sendPdf(res, filePath);
+    const ok = await streamRemoteFile(res, test.questionPdfUrl);
+    if (!ok) res.status(404).json({ message: "File not found" });
   } catch (error) {
     res.status(500).json({ message: "Failed to load question paper", error });
   }
@@ -72,16 +63,8 @@ export const streamAnswerKeyPdf = async (req: AuthRequest, res: Response): Promi
       res.status(403).json({ message: "Please purchase this test series to unlock it." });
       return;
     }
-    const filePath = resolveUploadPath(test.answerKeyUrl);
-    if (!filePath) {
-      res.status(404).json({ message: "File not found" });
-      return;
-    }
-    if (test.answerKeyType === "image") {
-      res.sendFile(filePath);
-      return;
-    }
-    sendPdf(res, filePath);
+    const ok = await streamRemoteFile(res, test.answerKeyUrl);
+    if (!ok) res.status(404).json({ message: "File not found" });
   } catch (error) {
     res.status(500).json({ message: "Failed to load answer key", error });
   }
@@ -105,12 +88,8 @@ export const streamNotePdf = async (req: AuthRequest, res: Response): Promise<vo
       res.status(403).json({ message: "Please purchase this subject to unlock this chapter." });
       return;
     }
-    const filePath = resolveUploadPath(note.pdfUrl);
-    if (!filePath) {
-      res.status(404).json({ message: "File not found" });
-      return;
-    }
-    sendPdf(res, filePath);
+    const ok = await streamRemoteFile(res, note.pdfUrl);
+    if (!ok) res.status(404).json({ message: "File not found" });
   } catch (error) {
     res.status(500).json({ message: "Failed to load chapter PDF", error });
   }
